@@ -14,6 +14,7 @@ import (
 type Configuration struct {
 	Servers   []string
 	Algorithm string
+  ServerWeights []int
 }
 
 func main() {
@@ -32,14 +33,22 @@ func main() {
 
 	fmt.Println(configuration.Servers)
 
-	var serverNumber int
+	serverNumber := 0
+  serverRequestNumber := 0
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if configuration.Algorithm == "RoundRobin" {
 			serverNumber = (serverNumber + 1) % len(configuration.Servers)
 		} else if configuration.Algorithm == "Random" {
 			serverNumber = rand.Intn(len(configuration.Servers))
-		}
+		} else if configuration.Algorithm == "WeightedRoundRobin" {
+      if serverRequestNumber < configuration.ServerWeights[serverNumber] {
+        serverRequestNumber++
+      } else {
+        serverNumber = (serverNumber + 1) % len(configuration.Servers)
+        serverRequestNumber = 1
+      }
+    }
 
 		targetUrl, _ := url.Parse(configuration.Servers[serverNumber])
 		httputil.NewSingleHostReverseProxy(targetUrl).ServeHTTP(w, r)
