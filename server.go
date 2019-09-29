@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"math"
@@ -9,16 +8,10 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"os"
 	"sync"
-)
 
-type Configuration struct {
-	Port          string
-	Servers       []string
-	Algorithm     string
-	ServerWeights []int
-}
+	"github.com/drsherlock/hermes/configuration"
+)
 
 type Server struct {
 	value    int
@@ -57,27 +50,18 @@ func (scc *ServerConnnectionsCount) Value(idx int) int {
 
 func main() {
 	// Load configuration
-	configFile, err := os.Open("config.json")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer configFile.Close()
+	cnf := configuration.Load()
 
-	decoder := json.NewDecoder(configFile)
-	configuration := Configuration{}
-	err = decoder.Decode(&configuration)
-	if err != nil {
-		log.Fatal(err)
-	}
+	servers := cnf.Servers
 
-	fmt.Println(configuration.Servers)
+	fmt.Println(servers)
 
 	serverNumber := 0
 	serverRequestNumber := 0
 
 	var mutex = &sync.Mutex{}
 
-	var cc = make([]int, len(configuration.Servers))
+	var cc = make([]int, len(servers))
 	var l = sync.Mutex{}
 	scc := ServerConnnectionsCount{
 		cc,
@@ -90,30 +74,31 @@ func main() {
 	total := 0
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if configuration.Algorithm == "RoundRobin" {
+		switch cnf.Algorithm {
+		case "RoundRobin":
 			mutex.Lock()
-			serverNumber = (serverNumber + 1) % len(configuration.Servers)
+			serverNumber = (serverNumber + 1) % len(servers)
 			mutex.Unlock()
-		} else if configuration.Algorithm == "Random" {
+		case "Random":
 			mutex.Lock()
-			serverNumber = rand.Intn(len(configuration.Servers))
+			serverNumber = rand.Intn(len(servers))
 			mutex.Unlock()
-		} else if configuration.Algorithm == "WeightedRoundRobin" {
+		case "WeightedRoundRobin":
 			mutex.Lock()
-			if serverRequestNumber < configuration.ServerWeights[serverNumber] {
+			if serverRequestNumber < cnf.ServerWeights[serverNumber] {
 				serverRequestNumber++
 			} else {
-				serverNumber = (serverNumber + 1) % len(configuration.Servers)
+				serverNumber = (serverNumber + 1) % len(servers)
 				serverRequestNumber = 1
 			}
 			mutex.Unlock()
-		} else if configuration.Algorithm == "LeastConnections" {
+		case "LeastConnections":
 			leastConnectionsCount := math.MaxInt32
 
-			for i := 0; i < len(configuration.Servers); i++ {
-				count := scc.Value(i)
-				if count <= leastConnectionsCount {
-					leastConnectionsCount = count
+			for i := 0; i < len(servers); i++ {
+				connectionsCount := scc.Value(i)
+				if connectionsCount <= leastConnectionsCount {
+					leastConnectionsCount = connectionsCount
 					mutex.Lock()
 					serverNumber = i
 					mutex.Unlock()
@@ -123,10 +108,10 @@ func main() {
 			mutex.Lock()
 			scc.Inc(serverNumber) // Increment connection count for server
 			mutex.Unlock()
-
 		}
+
 		mutex.Lock()
-		targetUrl, err := url.Parse(configuration.Servers[serverNumber])
+		targetUrl, err := url.Parse(servers[serverNumber])
 		if serverNumber == 0 {
 			a++
 		} else if serverNumber == 1 {
@@ -141,9 +126,10 @@ func main() {
 		}
 
 		// Send the request to the selected server
-		httputil.NewSingleHostReverseProxy(targetUrl).ServeHTTP(w, r)
+		proxy := httputil.NewSingleHostReverseProxy(targetUrl)
+		proxy.ServeHTTP(w, r)
 
-		if configuration.Algorithm == "LeastConnections" {
+		if cnf.Algorithm == "LeastConnections" {
 			mutex.Lock()
 			scc.Dec(serverNumber) // Decrement connection count for server
 			mutex.Unlock()
@@ -155,5 +141,5 @@ func main() {
 		mutex.Unlock()
 	})
 
-	http.ListenAndServe(":"+configuration.Port, nil)
+	http.ListenAndServe(":"+cnf.Port, nil)
 }
